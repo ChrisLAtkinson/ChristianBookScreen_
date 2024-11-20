@@ -1,51 +1,99 @@
 import streamlit as st
-from streamlit_option_menu import option_menu
-from apps import home, heatmap, upload  # import your app modules here
+import pandas as pd
+from serpapi import GoogleSearch
+import nltk
+from io import StringIO
 
-st.set_page_config(page_title="Streamlit Geospatial", layout="wide")
+# Pre-download NLTK resources
+try:
+    nltk.data.find("tokenizers/punkt")
+except LookupError:
+    nltk.download("punkt")
 
-# A dictionary of apps in the format of {"App title": "App icon"}
-# More icons can be found here: https://icons.getbootstrap.com
+# LGBTQ Keywords for analysis
+LGBTQ_KEYWORDS = ["LGBTQ", "gay", "lesbian", "transgender", "queer", "nonbinary", "bisexual", "LGBT"]
 
-apps = [
-    {"func": home.app, "title": "Home", "icon": "house"},
-    {"func": heatmap.app, "title": "Heatmap", "icon": "map"},
-    {"func": upload.app, "title": "Upload", "icon": "cloud-upload"},
-]
+# Function to fetch synopsis from SerpAPI
+def fetch_synopsis(book_title, api_key):
+    try:
+        search = GoogleSearch({
+            "q": f"{book_title} book synopsis",
+            "api_key": api_key,
+        })
+        results = search.get_dict()
+        # Get the snippet from organic results
+        if "organic_results" in results and len(results["organic_results"]) > 0:
+            return results["organic_results"][0].get("snippet", "No synopsis found.")
+        return "No synopsis found."
+    except Exception as e:
+        return f"Error fetching synopsis: {e}"
 
-titles = [app["title"] for app in apps]
-titles_lower = [title.lower() for title in titles]
-icons = [app["icon"] for app in apps]
+# Function to analyze synopsis for LGBTQ content
+def analyze_lgbtq_content(text):
+    if not text:
+        return False
+    tokens = nltk.word_tokenize(text.lower())
+    for keyword in LGBTQ_KEYWORDS:
+        if keyword.lower() in tokens:
+            return True
+    return False
 
-params = st.experimental_get_query_params()
-
-if "page" in params:
-    default_index = int(titles_lower.index(params["page"][0].lower()))
-else:
-    default_index = 0
-
-with st.sidebar:
-    selected = option_menu(
-        "Main Menu",
-        options=titles,
-        icons=icons,
-        menu_icon="cast",
-        default_index=default_index,
-    )
-
-    st.sidebar.title("About")
-    st.sidebar.info(
-        """
-        This web [app](https://share.streamlit.io/giswqs/streamlit-template) is maintained by [Qiusheng Wu](https://wetlands.io). You can follow me on social media:
-            [GitHub](https://github.com/giswqs) | [Twitter](https://twitter.com/giswqs) | [YouTube](https://www.youtube.com/c/QiushengWu) | [LinkedIn](https://www.linkedin.com/in/qiushengwu).
-        
-        Source code: <https://github.com/giswqs/streamlit-template>
-
-        More menu icons: <https://icons.getbootstrap.com>
+# Streamlit app UI
+st.title("LGBTQ Book Identifier")
+st.markdown(
     """
-    )
+    Upload a CSV file containing book titles (with a column named 'Title').
+    The app will analyze each title to identify LGBTQ themes or characters.
+    You need a [SerpAPI](https://serpapi.com/) key to fetch Google search results.
+    """
+)
 
-for app in apps:
-    if app["title"] == selected:
-        app["func"]()
-        break
+# API Key Input
+api_key = st.text_input("Enter your SerpAPI Key", type="password")
+
+# File uploader
+uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
+
+if api_key and uploaded_file:
+    # Read the uploaded CSV
+    try:
+        books = pd.read_csv(uploaded_file)
+        if "Title" not in books.columns:
+            st.error("The uploaded CSV must contain a column named 'Title'.")
+        else:
+            st.success("File uploaded successfully!")
+            titles = books["Title"].dropna().tolist()
+            st.write(f"Found {len(titles)} book titles.")
+
+            # Process the titles
+            if st.button("Start Analysis"):
+                results = []
+                with st.spinner("Analyzing titles... This may take some time."):
+                    for title in titles:
+                        synopsis = fetch_synopsis(title, api_key)
+                        has_lgbtq_content = analyze_lgbtq_content(synopsis)
+                        results.append(
+                            {"Title": title, "Synopsis": synopsis, "LGBTQ Content": has_lgbtq_content}
+                        )
+
+                # Convert results to DataFrame
+                result_df = pd.DataFrame(results)
+                st.write("Analysis Complete!")
+                st.dataframe(result_df)
+
+                # Download results as CSV
+                csv = StringIO()
+                result_df.to_csv(csv, index=False)
+                st.download_button(
+                    label="Download Results as CSV",
+                    data=csv.getvalue(),
+                    file_name="lgbtq_books_results.csv",
+                    mime="text/csv",
+                )
+    except Exception as e:
+        st.error(f"Error processing the uploaded file: {e}")
+else:
+    if not api_key:
+        st.info("Please enter your SerpAPI Key.")
+    if not uploaded_file:
+        st.info("Please upload a CSV file to proceed.")
